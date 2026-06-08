@@ -8,14 +8,39 @@ permissions:
   contents: read
 
 jobs:
-  archgate:
-    name: ADR Compliance Check
-    runs-on: ubuntu-latest
-
+  _archgate-self-hosted:
+    name: "ADR Compliance Check (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Run Archgate
+        uses: archgate/check-action@v1
+        with:
+          comment-on-pr: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: mark
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  archgate:
+    name: ADR Compliance Check
+    needs: _archgate-self-hosted
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Route
+        run: echo "self-hosted passed=${{ needs._archgate-self-hosted.outputs.passed }}"
+
+      - uses: actions/checkout@v4
+        if: needs._archgate-self-hosted.outputs.passed != 'true'
+
+      - name: Run Archgate
+        if: needs._archgate-self-hosted.outputs.passed != 'true'
         uses: archgate/check-action@v1
         with:
           comment-on-pr: true

@@ -8,55 +8,117 @@ on:
     - cron: '0 2 * * 1'
 
 jobs:
-  mix-audit:
-    name: Mix Audit
-    runs-on: ubuntu-latest
-
+  _mix-audit-self-hosted:
+    name: "Mix Audit (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     env:
       MIX_ENV: dev
-
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.17"
           otp-version: "27"
-
       - name: Restore deps cache
         uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-
-
       - name: Install dependencies
         run: mix deps.get
-
       - name: Check for vulnerable dependencies
         run: mix deps.audit
         continue-on-error: true
+      - id: mark
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
-  npm-audit:
-    name: NPM Audit
+  mix-audit:
+    name: Mix Audit
+    needs: _mix-audit-self-hosted
+    if: always()
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+    steps:
+      - name: Route
+        run: echo "self-hosted passed=${{ needs._mix-audit-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._mix-audit-self-hosted.outputs.passed != 'true'
+      - name: Set up Elixir
+        if: needs._mix-audit-self-hosted.outputs.passed != 'true'
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Restore deps cache
+        if: needs._mix-audit-self-hosted.outputs.passed != 'true'
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+      - name: Install dependencies
+        if: needs._mix-audit-self-hosted.outputs.passed != 'true'
+        run: mix deps.get
+      - name: Check for vulnerable dependencies
+        if: needs._mix-audit-self-hosted.outputs.passed != 'true'
+        run: mix deps.audit
+        continue-on-error: true
 
+  _npm-audit-self-hosted:
+    name: "NPM Audit (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     defaults:
       run:
         working-directory: frontend
-
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Run npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - id: mark
+        if: success()
+        working-directory: ${{ github.workspace }}
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  npm-audit:
+    name: NPM Audit
+    needs: _npm-audit-self-hosted
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Route
+        working-directory: ${{ github.workspace }}
+        run: echo "self-hosted passed=${{ needs._npm-audit-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._npm-audit-self-hosted.outputs.passed != 'true'
+      - name: Set up Node
+        if: needs._npm-audit-self-hosted.outputs.passed != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        if: needs._npm-audit-self-hosted.outputs.passed != 'true'
+        run: npm ci
+      - name: Run npm audit
+        if: needs._npm-audit-self-hosted.outputs.passed != 'true'
         run: npm audit --audit-level=high
         continue-on-error: true

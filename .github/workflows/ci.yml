@@ -7,9 +7,12 @@ on:
     branches: [main]
 
 jobs:
-  backend-test:
-    name: Backend Tests
-    runs-on: ubuntu-latest
+  # ==========================================================================
+  # backend-test (Elixir + Postgres service)
+  # ==========================================================================
+  _backend-test-self-hosted:
+    name: "Backend Tests (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -26,6 +29,9 @@ jobs:
           --health-retries 5
     env:
       MIX_ENV: test
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -53,13 +59,79 @@ jobs:
           flags: backend
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+      - id: mark
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
-  frontend-test:
-    name: Frontend Tests
+  backend-test:
+    name: Backend Tests
+    needs: _backend-test-self-hosted
+    if: always()
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kontor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+    steps:
+      - name: Route
+        run: echo "self-hosted passed=${{ needs._backend-test-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+      - uses: erlef/setup-beam@v1
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - uses: actions/cache@v4
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+      - name: Install dependencies
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+        run: mix deps.get
+      - name: Run tests with coverage
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+        run: mix coveralls.json
+        env:
+          CLOAK_KEY: ${{ secrets.CLOAK_KEY || 'dGVzdGtleWZvcmNpMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=' }}
+          GUARDIAN_SECRET: ${{ secrets.GUARDIAN_SECRET || 'test_guardian_secret_for_ci_only' }}
+      - name: Upload backend coverage to Codecov
+        if: needs._backend-test-self-hosted.outputs.passed != 'true'
+        uses: codecov/codecov-action@v4
+        with:
+          files: cover/excoveralls.json
+          flags: backend
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # ==========================================================================
+  # frontend-test (Node)
+  # ==========================================================================
+  _frontend-test-self-hosted:
+    name: "Frontend Tests (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     defaults:
       run:
         working-directory: frontend
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -78,12 +150,57 @@ jobs:
           flags: frontend
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+      - id: mark
+        if: success()
+        working-directory: ${{ github.workspace }}
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
-  lint-backend:
-    name: Credo Lint
+  frontend-test:
+    name: Frontend Tests
+    needs: _frontend-test-self-hosted
+    if: always()
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Route
+        working-directory: ${{ github.workspace }}
+        run: echo "self-hosted passed=${{ needs._frontend-test-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._frontend-test-self-hosted.outputs.passed != 'true'
+      - uses: actions/setup-node@v4
+        if: needs._frontend-test-self-hosted.outputs.passed != 'true'
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        if: needs._frontend-test-self-hosted.outputs.passed != 'true'
+        run: npm ci
+      - name: Run tests with coverage
+        if: needs._frontend-test-self-hosted.outputs.passed != 'true'
+        run: npm run test:coverage
+      - name: Upload frontend coverage to Codecov
+        if: needs._frontend-test-self-hosted.outputs.passed != 'true'
+        uses: codecov/codecov-action@v4
+        with:
+          files: frontend/coverage/lcov.info
+          flags: frontend
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # ==========================================================================
+  # lint-backend (Credo)
+  # ==========================================================================
+  _lint-backend-self-hosted:
+    name: "Credo Lint (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     env:
       MIX_ENV: test
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -101,10 +218,51 @@ jobs:
         run: mix deps.get
       - name: Run Credo
         run: mix credo --strict --min-priority higher
+      - id: mark
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
-  archgate:
-    name: Archgate ADR Check
+  lint-backend:
+    name: Credo Lint
+    needs: _lint-backend-self-hosted
+    if: always()
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+      - name: Route
+        run: echo "self-hosted passed=${{ needs._lint-backend-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._lint-backend-self-hosted.outputs.passed != 'true'
+      - uses: erlef/setup-beam@v1
+        if: needs._lint-backend-self-hosted.outputs.passed != 'true'
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - uses: actions/cache@v4
+        if: needs._lint-backend-self-hosted.outputs.passed != 'true'
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+      - name: Install dependencies
+        if: needs._lint-backend-self-hosted.outputs.passed != 'true'
+        run: mix deps.get
+      - name: Run Credo
+        if: needs._lint-backend-self-hosted.outputs.passed != 'true'
+        run: mix credo --strict --min-priority higher
+
+  # ==========================================================================
+  # archgate (npx archgate check)
+  # ==========================================================================
+  _archgate-self-hosted:
+    name: "Archgate ADR Check (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -112,13 +270,40 @@ jobs:
           node-version: "20"
       - name: Run Archgate check
         run: npx --yes archgate check
+      - id: mark
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
-  e2e:
-    name: Playwright E2E
+  archgate:
+    name: Archgate ADR Check
+    needs: _archgate-self-hosted
+    if: always()
     runs-on: ubuntu-latest
+    steps:
+      - name: Route
+        run: echo "self-hosted passed=${{ needs._archgate-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._archgate-self-hosted.outputs.passed != 'true'
+      - uses: actions/setup-node@v4
+        if: needs._archgate-self-hosted.outputs.passed != 'true'
+        with:
+          node-version: "20"
+      - name: Run Archgate check
+        if: needs._archgate-self-hosted.outputs.passed != 'true'
+        run: npx --yes archgate check
+
+  # ==========================================================================
+  # e2e (Playwright)
+  # ==========================================================================
+  _e2e-self-hosted:
+    name: "Playwright E2E (self-hosted)"
+    runs-on: [self-hosted, ubuntu-latest]
     defaults:
       run:
         working-directory: frontend
+    continue-on-error: true
+    outputs:
+      passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -135,6 +320,47 @@ jobs:
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: playwright-report-self-hosted
+          path: frontend/playwright-report/
+          retention-days: 7
+      - id: mark
+        if: success()
+        working-directory: ${{ github.workspace }}
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: Playwright E2E
+    needs: _e2e-self-hosted
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Route
+        working-directory: ${{ github.workspace }}
+        run: echo "self-hosted passed=${{ needs._e2e-self-hosted.outputs.passed }}"
+      - uses: actions/checkout@v4
+        if: needs._e2e-self-hosted.outputs.passed != 'true'
+      - uses: actions/setup-node@v4
+        if: needs._e2e-self-hosted.outputs.passed != 'true'
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        if: needs._e2e-self-hosted.outputs.passed != 'true'
+        run: npm ci
+      - name: Install Playwright browsers
+        if: needs._e2e-self-hosted.outputs.passed != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E tests
+        if: needs._e2e-self-hosted.outputs.passed != 'true'
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: always() && needs._e2e-self-hosted.outputs.passed != 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: frontend/playwright-report/
