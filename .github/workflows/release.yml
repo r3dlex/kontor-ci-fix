@@ -6,10 +6,188 @@ on:
       - "v*.*.*"
 
 jobs:
+  # ── Tier 1: self-hosted build per target ──────────────────────────────────
+  # Each matrix target gets its own self-hosted probe leg.
+  # macOS targets → [self-hosted, macOS]; ubuntu target → [self-hosted, ubuntu-latest].
+  # continue-on-error: true means an offline/flake self-hosted runner doesn't
+  # block the tag from being released. The gate job routes the canonical leg
+  # only when the probe did not pass.
+  # timeout-minutes: 30 bounds a running job; ensure a runner is online to
+  # prevent the tag-release from hanging in queued state.
+  _build-macos_arm-self-hosted:
+    name: "Build macos_arm (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, macOS]
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: macos_arm
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-macos-arm
+          path: |
+            burrito_out/macos_arm*
+          if-no-files-found: warn
+      - name: Gate
+        id: gate
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  _build-macos_x86-self-hosted:
+    name: "Build macos_x86 (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, macOS]
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: macos_x86
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-macos-x86
+          path: |
+            burrito_out/macos_x86*
+          if-no-files-found: warn
+      - name: Gate
+        id: gate
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  _build-linux_x86-self-hosted:
+    name: "Build linux_x86 (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, ubuntu-latest]
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: linux_x86
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-linux-x86
+          path: |
+            burrito_out/linux_x86*
+          if-no-files-found: warn
+      - name: Gate
+        id: gate
+        if: success()
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  # ── Tier 2: gate router ───────────────────────────────────────────────────
+  # One gate per target reads the corresponding probe result.
+  _build-macos_arm-gate:
+    name: "Build macos_arm (gate)"
+    needs: [_build-macos_arm-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-macos_arm-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  _build-macos_x86-gate:
+    name: "Build macos_x86 (gate)"
+    needs: [_build-macos_x86-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-macos_x86-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  _build-linux_x86-gate:
+    name: "Build linux_x86 (gate)"
+    needs: [_build-linux_x86-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-linux_x86-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Tier 3: canonical GH-hosted fallback per target ───────────────────────
+  # Run only when the corresponding self-hosted probe did not pass.
+  # Branch-protection watches job *name* (preserved as "Build ${{matrix.target}}").
+  # The matrix `include:` block is preserved verbatim on the canonical leg so
+  # the tag-release artifact name and BURRITO_TARGET chain stay identical.
   build:
     name: Build ${{ matrix.target }}
+    needs: [_build-macos_arm-gate, _build-macos_x86-gate, _build-linux_x86-gate]
+    if: always()
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -17,41 +195,50 @@ jobs:
           - os: macos-latest
             target: macos_arm
             artifact_name: kontor-macos-arm
+            sh_passed: ${{ needs._build-macos_arm-gate.outputs.passed }}
           - os: macos-latest
             target: macos_x86
             artifact_name: kontor-macos-x86
+            sh_passed: ${{ needs._build-macos_x86-gate.outputs.passed }}
           - os: ubuntu-latest
             target: linux_x86
             artifact_name: kontor-linux-x86
-
+            sh_passed: ${{ needs._build-linux_x86-gate.outputs.passed }}
     env:
       MIX_ENV: prod
-
     steps:
+      - name: Route
+        run: |
+          if [ "${{ matrix.sh_passed }}" = "true" ]; then
+            echo "Self-hosted leg for ${{ matrix.target }} passed — GH-hosted fallback skipped."
+          else
+            echo "Self-hosted leg for ${{ matrix.target }} did not pass — running GH-hosted fallback."
+          fi
       - uses: actions/checkout@v4
-
+        if: matrix.sh_passed != 'true'
       - name: Set up Elixir
+        if: matrix.sh_passed != 'true'
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.17"
           otp-version: "27"
-
       - name: Restore deps cache
+        if: matrix.sh_passed != 'true'
         uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-prod-
-
       - name: Install dependencies
+        if: matrix.sh_passed != 'true'
         run: mix deps.get --only prod
-
       - name: Build release
+        if: matrix.sh_passed != 'true'
         run: MIX_ENV=prod mix release
         env:
           BURRITO_TARGET: ${{ matrix.target }}
-
       - name: Upload artifact
+        if: matrix.sh_passed != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -63,18 +250,14 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: build
-
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
