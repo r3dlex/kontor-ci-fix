@@ -29,11 +29,26 @@ jobs:
           --health-retries 5
     env:
       MIX_ENV: test
+      # setup-beam cannot infer the target OS on a self-hosted runner and
+      # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+      # (got undefined)".
+      ImageOS: ubuntu24
     continue-on-error: true
     outputs:
       passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-3 and r3dlex-runner-4 are two runner instances on one
+          # host that share a single $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default) corrupt
+          # the shared Hex archive. Give every job its own MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.17"
@@ -198,11 +213,26 @@ jobs:
     runs-on: [self-hosted, ubuntu-latest]
     env:
       MIX_ENV: test
+      # setup-beam cannot infer the target OS on a self-hosted runner and
+      # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+      # (got undefined)".
+      ImageOS: ubuntu24
     continue-on-error: true
     outputs:
       passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-3 and r3dlex-runner-4 are two runner instances on one
+          # host that share a single $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default) corrupt
+          # the shared Hex archive. Give every job its own MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.17"
@@ -265,11 +295,12 @@ jobs:
       passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+      # The self-hosted Linux/ARM64 runners ship archgate 0.60.0 on PATH.
+      # `npx archgate` and `archgate/setup-action` both fail here: upstream
+      # publishes no linux/arm64 release and the npm shim aborts with
+      # "Unsupported platform: linux/arm64".
       - name: Run Archgate check
-        run: npx --yes archgate check
+        run: .github/scripts/archgate-check.sh
       - id: mark
         if: success()
         run: echo "passed=true" >> "$GITHUB_OUTPUT"
@@ -284,13 +315,16 @@ jobs:
         run: echo "self-hosted passed=${{ needs._archgate-self-hosted.outputs.passed }}"
       - uses: actions/checkout@v4
         if: needs._archgate-self-hosted.outputs.passed != 'true'
-      - uses: actions/setup-node@v4
+      # Same pinned version as the self-hosted leg, so both legs evaluate the
+      # same rule set.
+      - name: Install Archgate
         if: needs._archgate-self-hosted.outputs.passed != 'true'
+        uses: archgate/setup-action@b59adbe1ed404916ee60e1d558766718d5e3076c # v1
         with:
-          node-version: "20"
+          version: v0.60.0
       - name: Run Archgate check
         if: needs._archgate-self-hosted.outputs.passed != 'true'
-        run: npx --yes archgate check
+        run: .github/scripts/archgate-check.sh
 
   # ==========================================================================
   # e2e (Playwright)

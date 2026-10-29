@@ -1,4 +1,4 @@
-import { defineRule, type RuleContext } from 'archgate'
+/// <reference path="../rules.d.ts" />
 
 /**
  * ARCH-001: Himalaya as sole email transport
@@ -10,51 +10,58 @@ import { defineRule, type RuleContext } from 'archgate'
  * Exception: lib/kontor/mcp/himalaya_client.ex is the designated integration
  * point and is excluded from these checks.
  */
-export default defineRule({
-  id: 'ARCH-001',
-  description: 'Himalaya must be the sole email transport — no direct IMAP/SMTP/gen_tcp in mail or MCP modules',
-  files: ['lib/kontor/mail/**/*.ex', 'lib/kontor/mcp/**/*.ex'],
-
-  check(ctx: RuleContext) {
-    const { file, content, path } = ctx
-
-    // Exception: himalaya_client.ex is the designated MCP wrapper
-    if (path.endsWith('himalaya_client.ex')) {
-      return
-    }
-
-    // Check for raw socket imports
-    if (/:gen_tcp/.test(content)) {
-      ctx.error(
-        `ARCH-001: Direct use of :gen_tcp found in ${path}. ` +
-        'All email transport must go through Himalaya MCP (himalaya_client.ex).'
-      )
-    }
-
-    if (/:ssl/.test(content)) {
-      ctx.error(
-        `ARCH-001: Direct use of :ssl found in ${path}. ` +
-        'All email transport must go through Himalaya MCP (himalaya_client.ex).'
-      )
-    }
-
-    // Check for IMAP/SMTP string literals used as protocol markers
-    // Match quoted strings containing IMAP or SMTP (not inside comments)
-    const lines = content.split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      const lineNumber = i + 1
-
-      // Skip comment lines
-      if (/^\s*#/.test(line)) continue
-
-      // Check for IMAP or SMTP as string literals (quoted)
-      if (/"IMAP"/.test(line) || /"SMTP"/.test(line)) {
-        ctx.error(
-          `ARCH-001: IMAP/SMTP string literal found at ${path}:${lineNumber}. ` +
-          'Protocol identifiers must not appear in mail/mcp modules outside himalaya_client.ex.'
+export default {
+  rules: {
+    'no-raw-socket-transport': {
+      description:
+        'Himalaya must be the sole email transport — no direct IMAP/SMTP/gen_tcp in mail or MCP modules',
+      severity: 'error',
+      async check(ctx) {
+        const files = ctx.scopedFiles.filter(
+          (f) => !f.endsWith('himalaya_client.ex')
         )
-      }
-    }
-  }
-})
+        const matches = await Promise.all(
+          files.map(async (file) => ctx.grep(file, /:(?:gen_tcp|ssl)/u))
+        )
+        for (const fileMatches of matches) {
+          for (const m of fileMatches) {
+            ctx.report.violation({
+              message:
+                `ARCH-001: direct raw socket module use found at ${m.file}:${m.line}. ` +
+                'All email transport must go through Himalaya MCP (himalaya_client.ex).',
+              file: m.file,
+              line: m.line,
+            })
+          }
+        }
+      },
+    },
+    'no-imap-smtp-literals': {
+      description:
+        'IMAP/SMTP protocol literals must not appear in mail or MCP modules outside himalaya_client.ex',
+      severity: 'error',
+      async check(ctx) {
+        const files = ctx.scopedFiles.filter(
+          (f) => !f.endsWith('himalaya_client.ex')
+        )
+        const matches = await Promise.all(
+          files.map(async (file) => ctx.grep(file, /"(?:IMAP|SMTP)"/u))
+        )
+        for (const fileMatches of matches) {
+          for (const m of fileMatches) {
+            // Elixir comments start with '#' — a literal inside a comment is
+            // prose, not a protocol marker.
+            if (/^\s*#/u.test(m.content)) continue
+            ctx.report.violation({
+              message:
+                `ARCH-001: IMAP/SMTP string literal found at ${m.file}:${m.line}. ` +
+                'Protocol identifiers must not appear in mail/mcp modules outside himalaya_client.ex.',
+              file: m.file,
+              line: m.line,
+            })
+          }
+        }
+      },
+    },
+  },
+} satisfies RuleSet

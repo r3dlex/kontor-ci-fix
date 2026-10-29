@@ -256,12 +256,10 @@ defmodule Kontor.AI.Pipeline do
   end
 
   defp fire_webhook(%{frontmatter: %{"webhook" => url}}, result, _tenant_id) when is_binary(url) and url != "" do
-    Task.start(fn ->
-      case Req.post(url, json: %{result: result, source: "kontor"}) do
-        {:ok, _} -> :ok
-        {:error, reason} -> Logger.warning("Webhook POST to #{url} failed: #{inspect(reason)}")
-      end
-    end)
+    # Delivery lives in Kontor.Automations so that no module under lib/kontor/ai/
+    # performs a direct HTTP call — ARCH-003 reserves outbound requests for the
+    # designated clients (minimax_client.ex, embeddings.ex).
+    Kontor.Automations.post_webhook(url, %{result: result, source: "kontor"})
   end
   defp fire_webhook(_skill, _result, _tenant_id), do: :ok
 

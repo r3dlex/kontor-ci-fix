@@ -13,11 +13,26 @@ jobs:
     runs-on: [self-hosted, ubuntu-latest]
     env:
       MIX_ENV: dev
+      # setup-beam cannot infer the target OS on a self-hosted runner and
+      # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+      # (got undefined)".
+      ImageOS: ubuntu24
     continue-on-error: true
     outputs:
       passed: ${{ steps.mark.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-3 and r3dlex-runner-4 are two runner instances on one
+          # host that share a single $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default) corrupt
+          # the shared Hex archive. Give every job its own MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:

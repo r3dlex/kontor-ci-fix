@@ -1,7 +1,7 @@
 ---
 id: ARCH-006
 title: Email reference storage (reference-first, copy-optional)
-domain: email, storage
+domain: email-storage
 rules: true
 files: ["lib/kontor/mail/**/*.ex", "lib/kontor/accounts/mailbox.ex", "lib/kontor/ai/pipeline.ex", "lib/kontor/ai/sandbox.ex", "priv/repo/migrations/*reference_storage*"]
 ---
