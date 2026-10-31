@@ -90,17 +90,33 @@ fi
 # passed with nothing evaluated — the very vacuous pass this script exists to
 # prevent. Capture the raw payload first and treat a non-JSON payload as an
 # error instead of as an empty list.
-adr_json="$("$ARCHGATE_BIN" adr list --json 2>&1)" || adr_json=""
+#
+# stderr is kept out of the payload: archgate writes diagnostics there, and a
+# stray notice would turn a valid payload into invalid JSON.
+adr_stderr="${REPORT}.adr-list.err"
+adr_json="$("$ARCHGATE_BIN" adr list --json 2>"$adr_stderr")" || adr_json=""
 if [ -z "$adr_json" ] || ! printf '%s' "$adr_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
   fail_gate "archgate adr list did not return a JSON array — the ADR corpus is empty or unreadable, so no rule can be verified"
   echo "archgate adr list output: $adr_json"
+  echo "archgate adr list stderr: $(cat "$adr_stderr" 2>/dev/null)"
   adr_json='[]'
 fi
 
+# Derive the expectation list from the validated payload. When jq cannot index
+# the payload's elements it errors, prints nothing, and `expected` degrades to
+# the empty string. A shell integer test on that string is a bash syntax
+# error (exit 2), not a comparison, so the assertion below would be skipped
+# rather than fail — and the `--argjson` difference after it would fail too,
+# skipping the ADR-level assertion as well. Validate the derived value with
+# `jq -e` and never hand an unvalidated value to `--argjson`.
 expected="$(printf '%s' "$adr_json" | jq -c '[.[] | select(.rules == true) | .id]')"
+if ! printf '%s' "$expected" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  fail_gate "could not derive the ADR expectation list — the gate would compare nothing"
+  expected='[]'
+fi
 
 # A corpus in which no ADR declares `rules: true` would evaluate nothing too.
-if [ "$(printf '%s' "$expected" | jq -r 'length')" -eq 0 ]; then
+if ! printf '%s' "$expected" | jq -e 'length > 0' >/dev/null 2>&1; then
   fail_gate "no ADR declares rules: true — the ADR gate would evaluate nothing"
 fi
 

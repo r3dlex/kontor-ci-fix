@@ -29,7 +29,7 @@ defmodule Kontor.CI.ArchgateCheckTest do
     #!/usr/bin/env bash
     case "$1" in
       --version) echo "archgate ${STUB_VERSION:-0.60.0}" ;;
-      check) cat "$STUB_DIR/report.json" ;;
+      check) cat "$STUB_DIR/report.json"; exit "${STUB_CHECK_EXIT:-0}" ;;
       adr) cat "$STUB_DIR/adr-list.txt" ;;
       *) echo "unexpected archgate invocation: $*" >&2; exit 64 ;;
     esac
@@ -109,6 +109,28 @@ defmodule Kontor.CI.ArchgateCheckTest do
     assert output =~ "0.60.0 is required"
   end
 
+  test "fails closed when the expectation list cannot be derived", %{stub_dir: stub_dir} do
+    # A corpus whose elements are not objects makes the derivation jq filter
+    # error out. The derived value then degrades to an empty string, and a
+    # shell integer test on it is a bash syntax error rather than a
+    # comparison — so the assertion would be skipped instead of failing.
+    {output, status} =
+      run_gate(stub_dir, report(), ~s(["not-an-adr-object"]\n))
+
+    refute status == 0
+    assert output =~ "could not derive the ADR expectation list"
+    refute output =~ "archgate gate passed"
+  end
+
+  test "preserves archgate's exit code instead of downgrading it", %{stub_dir: stub_dir} do
+    # archgate exits 2 for rule errors and 1 for error-severity violations.
+    # The gate must report the specific code, not rewrite it to 1.
+    {output, status} = run_gate(stub_dir, report(), adr_list(), check_exit: 2)
+
+    assert status == 2
+    refute output =~ "archgate gate passed"
+  end
+
   defp run_gate(stub_dir, report, adr_list, opts \\ []) do
     File.write!(Path.join(stub_dir, "report.json"), report)
     File.write!(Path.join(stub_dir, "adr-list.txt"), adr_list)
@@ -122,6 +144,7 @@ defmodule Kontor.CI.ArchgateCheckTest do
           {"PATH", "#{stub_dir}:#{System.get_env("PATH") || ""}"},
           {"STUB_DIR", stub_dir},
           {"STUB_VERSION", Keyword.get(opts, :version, "0.60.0")},
+          {"STUB_CHECK_EXIT", to_string(Keyword.get(opts, :check_exit, "0"))},
           {"RUNNER_TEMP", runner_temp}
         ],
         stderr_to_stdout: true
