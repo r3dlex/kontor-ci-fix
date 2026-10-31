@@ -4,7 +4,9 @@ on:
   pull_request:
 
 permissions:
-  pull-requests: write
+  # The gate reports its findings as GitHub Actions annotations (the
+  # `::error file=...` form the script emits), not as a pull request
+  # comment, so it needs no write access to the pull request.
   contents: read
 
 jobs:
