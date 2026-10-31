@@ -63,8 +63,12 @@ defmodule Kontor.CI.SelfHostedWorkflowTest do
 
       run = to_string(gate["run"] || "")
 
-      assert run =~ "BURRITO_TARGET", "#{job_id}: the gate step does not look at the built artifact"
-      assert run =~ "burrito_out/", "#{job_id}: the gate step does not look at burrito's output dir"
+      assert run =~ "BURRITO_TARGET",
+             "#{job_id}: the gate step does not look at the built artifact"
+
+      assert run =~ "burrito_out/",
+             "#{job_id}: the gate step does not look at burrito's output dir"
+
       assert run =~ "exit 1", "#{job_id}: the gate step cannot fail"
     end
   end

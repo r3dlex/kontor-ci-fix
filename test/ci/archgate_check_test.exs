@@ -64,7 +64,11 @@ defmodule Kontor.CI.ArchgateCheckTest do
 
   test "fails closed when no ADR declares rules: true", %{stub_dir: stub_dir} do
     {output, status} =
-      run_gate(stub_dir, report(), ~s([{"id":"ARCH-001","title":"t","domain":"d","rules":false}]\n))
+      run_gate(
+        stub_dir,
+        report(),
+        ~s([{"id":"ARCH-001","title":"t","domain":"d","rules":false}]\n)
+      )
 
     refute status == 0
     assert output =~ "no ADR declares rules: true"
