@@ -389,16 +389,37 @@ The ADR corpus lives in `.archgate/adrs/` (one `<id>.md` plus its companion
 - The gate pins archgate `0.60.0` and runs it with `--staged`, so the
   changed-file set is empty in CI and every ADR in the corpus is evaluated.
   It fails closed: an empty or unreadable corpus, a corpus in which no ADR
-  declares `rules: true`, a report that evaluated no rule, and an ADR that
-  declares rules but produced no result are all build failures.
+  declares `rules: true`, an expectation list that cannot be derived from the
+  corpus, a report that evaluated no rule, and an ADR that declares rules but
+  produced no result are all build failures.
 - `.archgate/rules.d.ts` is **generated** by archgate ("do not edit"). It is
   checked in so the `/// <reference path="../rules.d.ts" />` chain in the
   rule files type-checks in editors; refresh it whenever the pinned archgate
   version is bumped, or a local `archgate check` will leave it modified.
 - `.archgate/config.ts` is **not read** by archgate 0.60.0 — the CLI reads
-  `.archgate/config.json`, which only carries custom ADR domain prefixes.
-  The behaviour it describes (`adrDir`, `failOn`, `ignore`) is the CLI
-  default, so the file documents intent rather than configuring the tool.
+  `.archgate/config.json` if one is present, and this repository has none, so
+  archgate runs entirely on its defaults. Those defaults happen to be exactly
+  what `config.ts` describes (`adrDir`, `failOn`, `ignore`), so the file
+  documents intent rather than configuring the tool.
+
+### Release build prerequisites
+`mix release` runs burrito's `wrap/1` step, and burrito 1.5.0's `pre_check/0`
+requires **both** `zig` (exactly `0.15.2`) and `xz` on `PATH` and calls
+`exit(1)` when either is missing. No runner in the fleet ships zig, so
+`.github/workflows/release.yml` installs it with `mlugg/setup-zig` (pinned to a
+commit SHA) and checks both prerequisites in the job itself before the build
+step runs — a missing prerequisite then fails with a message that names it
+instead of aborting inside burrito. `xz` needs a nudge on macOS 27, which no
+longer ships `/usr/bin/xz`; the runners carry Homebrew's `xz` instead, so the
+step adds a known Homebrew prefix to `PATH` when `xz` is not already there.
+
+### Dependency audits
+`Mix Audit` and `NPM Audit` are **advisory**. The dependency trees carry known
+advisories today, and promoting them to hard gates is a maintainer decision
+that needs those advisories resolved first. The checks are therefore named
+"(advisory)" and report a failed audit as a `::warning::` annotation plus a job
+summary entry, so they never read as "the tree is clean" while the audit
+underneath them exits non-zero.
 
 ## v1 Scope
 
