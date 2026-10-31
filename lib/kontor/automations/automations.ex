@@ -2,6 +2,7 @@ defmodule Kontor.Automations do
   @moduledoc "Context module for webhook registration and delivery for n8n automation integration."
 
   import Ecto.Query
+  require Logger
   alias Kontor.Repo
   alias Kontor.Automations.Webhook
 
@@ -20,6 +21,22 @@ defmodule Kontor.Automations do
   @doc "List all webhooks for the given tenant."
   def list_webhooks(tenant_id) do
     Repo.all(from w in Webhook, where: w.tenant_id == ^tenant_id, order_by: [asc: w.inserted_at])
+  end
+
+  @doc """
+  Deliver a skill-scoped webhook payload with an async HTTP POST.
+
+  Delivery lives here rather than in the AI pipeline so that no module under
+  `lib/kontor/ai/` performs a direct HTTP call — ARCH-003 reserves outbound
+  requests for the designated clients.
+  """
+  def post_webhook(url, payload) do
+    Task.start(fn ->
+      case Req.post(url, json: payload) do
+        {:ok, _} -> :ok
+        {:error, reason} -> Logger.warning("Webhook POST to #{url} failed: #{inspect(reason)}")
+      end
+    end)
   end
 
   @doc """

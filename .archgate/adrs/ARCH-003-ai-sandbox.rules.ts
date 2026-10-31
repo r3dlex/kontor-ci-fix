@@ -1,4 +1,4 @@
-import { defineRule, type RuleContext } from 'archgate'
+/// <reference path="../rules.d.ts" />
 
 /**
  * ARCH-003: LLM actions must pass through AI Sandbox
@@ -6,46 +6,54 @@ import { defineRule, type RuleContext } from 'archgate'
  * - lib/kontor/ai/pipeline.ex must reference "Sandbox" or "AI.Sandbox"
  * - Direct Req.get/Req.post calls outside minimax_client.ex and embeddings.ex are violations
  */
-export default defineRule({
-  id: 'ARCH-003',
-  description: 'All LLM pipeline actions must pass through AI.Sandbox; direct Req calls are only permitted in minimax_client.ex and embeddings.ex',
-  files: ['lib/kontor/ai/**/*.ex'],
+export default {
+  rules: {
+    'pipeline-uses-sandbox': {
+      description:
+        'lib/kontor/ai/pipeline.ex must route LLM-proposed actions through AI.Sandbox',
+      severity: 'error',
+      async check(ctx) {
+        const file = ctx.scopedFiles.find((f) => f.endsWith('pipeline.ex'))
+        if (file === undefined) return
 
-  check(ctx: RuleContext) {
-    const { content, path } = ctx
-
-    // Rule 1: pipeline.ex must reference Sandbox
-    if (path.endsWith('pipeline.ex')) {
-      if (!/Sandbox|AI\.Sandbox/.test(content)) {
-        ctx.error(
-          `ARCH-003: ${path} does not reference Sandbox or AI.Sandbox. ` +
-          'The AI pipeline must route all LLM-proposed actions through the Sandbox allowlist validator.'
+        const content = await ctx.readFile(file)
+        if (!/Sandbox|AI\.Sandbox/.test(content)) {
+          ctx.report.violation({
+            message:
+              `ARCH-003: ${file} does not reference Sandbox or AI.Sandbox. ` +
+              'The AI pipeline must route all LLM-proposed actions through the Sandbox allowlist validator.',
+            file,
+          })
+        }
+      },
+    },
+    'no-direct-http-in-ai-modules': {
+      description:
+        'Direct Req.get/Req.post calls are only permitted in minimax_client.ex and embeddings.ex',
+      severity: 'error',
+      async check(ctx) {
+        const files = ctx.scopedFiles.filter(
+          (f) =>
+            !f.endsWith('minimax_client.ex') && !f.endsWith('embeddings.ex')
         )
-      }
-    }
-
-    // Rule 2: Direct Req.get/Req.post outside of permitted files
-    const isPermittedHttpFile =
-      path.endsWith('minimax_client.ex') ||
-      path.endsWith('embeddings.ex')
-
-    if (isPermittedHttpFile) return
-
-    const lines = content.split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      const lineNumber = i + 1
-
-      // Skip comment lines
-      if (/^\s*#/.test(line)) continue
-
-      if (/Req\.(get|post)\(/.test(line)) {
-        ctx.error(
-          `ARCH-003: Direct Req.get/Req.post call found at ${path}:${lineNumber}. ` +
-          'Direct HTTP calls from AI modules are only permitted in minimax_client.ex and embeddings.ex. ' +
-          'All other AI module HTTP interactions must go through the designated clients.'
+        const matches = await Promise.all(
+          files.map(async (file) => ctx.grep(file, /Req\.(?:get|post)\(/u))
         )
-      }
-    }
-  }
-})
+        for (const fileMatches of matches) {
+          for (const m of fileMatches) {
+            // Skip comment lines
+            if (/^\s*#/.test(m.content)) continue
+            ctx.report.violation({
+              message:
+                `ARCH-003: direct Req.get/Req.post call found at ${m.file}:${m.line}. ` +
+                'Direct HTTP calls from AI modules are only permitted in minimax_client.ex and embeddings.ex. ' +
+                'All other AI module HTTP interactions must go through the designated clients.',
+              file: m.file,
+              line: m.line,
+            })
+          }
+        }
+      },
+    },
+  },
+} satisfies RuleSet

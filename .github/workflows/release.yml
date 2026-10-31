@@ -6,10 +6,406 @@ on:
       - "v*.*.*"
 
 jobs:
+  # ── Tier 1: self-hosted build per target ──────────────────────────────────
+  # Each matrix target gets its own self-hosted probe leg.
+  # macOS targets → [self-hosted, macOS]; ubuntu target → [self-hosted, ubuntu-latest].
+  # continue-on-error: true means an offline/flake self-hosted runner doesn't
+  # block the tag from being released. The gate job routes the canonical leg
+  # only when the probe did not pass.
+  # timeout-minutes: 30 bounds a RUNNING job only — GitHub starts the clock
+  # when the job is picked up by a runner, so it does not bound the queued
+  # state. A probe whose runner is offline waits in the queue indefinitely;
+  # keep a runner online to prevent the tag-release from hanging.
+  _build-macos_arm-self-hosted:
+    name: "Build macos_arm (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, macOS]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)". The macOS runners are macOS 27 and setup-beam v1
+    # publishes no macos27 alias (its map stops at macos26); on darwin the
+    # alias only labels the build — the OTP build itself is resolved from the
+    # upstream aarch64-apple-darwin version list and downloaded as
+    # <otp>-macos-arm64.tar.gz — so the newest published macOS alias is used.
+    env:
+      ImageOS: macos26
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-1 and r3dlex-runner-2 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: macos_arm
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-macos-arm
+          path: burrito_out/*macos_arm*
+          if-no-files-found: error
+      - name: Gate
+        id: gate
+        if: success()
+        env:
+          BURRITO_TARGET: macos_arm
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_macos_arm).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  _build-macos_x86-self-hosted:
+    name: "Build macos_x86 (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, macOS]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)". The macOS runners are macOS 27 and setup-beam v1
+    # publishes no macos27 alias (its map stops at macos26); on darwin the
+    # alias only labels the build — the OTP build itself is resolved from the
+    # upstream aarch64-apple-darwin version list and downloaded as
+    # <otp>-macos-arm64.tar.gz — so the newest published macOS alias is used.
+    env:
+      ImageOS: macos26
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-1 and r3dlex-runner-2 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: macos_x86
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-macos-x86
+          path: burrito_out/*macos_x86*
+          if-no-files-found: error
+      - name: Gate
+        id: gate
+        if: success()
+        env:
+          BURRITO_TARGET: macos_x86
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_macos_x86).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  _build-linux_x86-self-hosted:
+    name: "Build linux_x86 (self-hosted)"
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: [self-hosted, ubuntu-latest]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)".
+    env:
+      ImageOS: ubuntu24
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-3 and r3dlex-runner-4 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prod-
+      - name: Install dependencies
+        run: mix deps.get --only prod
+      - name: Build release
+        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_TARGET: linux_x86
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kontor-linux-x86
+          path: burrito_out/*linux_x86*
+          if-no-files-found: error
+      - name: Gate
+        id: gate
+        if: success()
+        env:
+          BURRITO_TARGET: linux_x86
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_linux_x86).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  # ── Tier 2: gate router ───────────────────────────────────────────────────
+  # One gate per target reads the corresponding probe result.
+  _build-macos_arm-gate:
+    name: "Build macos_arm (gate)"
+    needs: [_build-macos_arm-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-macos_arm-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  _build-macos_x86-gate:
+    name: "Build macos_x86 (gate)"
+    needs: [_build-macos_x86-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-macos_x86-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  _build-linux_x86-gate:
+    name: "Build linux_x86 (gate)"
+    needs: [_build-linux_x86-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check self-hosted outcome
+        id: check
+        run: |
+          if [ "${{ needs._build-linux_x86-self-hosted.outputs.passed }}" = "true" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Tier 3: canonical GH-hosted fallback per target ───────────────────────
+  # Run only when the corresponding self-hosted probe did not pass.
+  # The job *name* ("Build ${{matrix.target}}") and the matrix `include:` block
+  # are preserved from the base workflow so the tag-release artifact name and
+  # BURRITO_TARGET chain stay identical. Branch protection watches job names,
+  # so keeping them stable matters if this workflow is upstreamed into a
+  # protected repository — this repository itself has no branch protection
+  # (`gh api repos/…/branches/main/protection` returns 404), so nothing here
+  # gates a merge on these names today.
   build:
     name: Build ${{ matrix.target }}
+    needs: [_build-macos_arm-gate, _build-macos_x86-gate, _build-linux_x86-gate]
+    if: always()
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -17,64 +413,107 @@ jobs:
           - os: macos-latest
             target: macos_arm
             artifact_name: kontor-macos-arm
+            sh_passed: ${{ needs._build-macos_arm-gate.outputs.passed }}
           - os: macos-latest
             target: macos_x86
             artifact_name: kontor-macos-x86
+            sh_passed: ${{ needs._build-macos_x86-gate.outputs.passed }}
           - os: ubuntu-latest
             target: linux_x86
             artifact_name: kontor-linux-x86
-
+            sh_passed: ${{ needs._build-linux_x86-gate.outputs.passed }}
     env:
       MIX_ENV: prod
-
     steps:
+      - name: Route
+        run: |
+          if [ "${{ matrix.sh_passed }}" = "true" ]; then
+            echo "Self-hosted leg for ${{ matrix.target }} passed — GH-hosted fallback skipped."
+          else
+            echo "Self-hosted leg for ${{ matrix.target }} did not pass — running GH-hosted fallback."
+          fi
       - uses: actions/checkout@v4
-
+        if: matrix.sh_passed != 'true'
       - name: Set up Elixir
+        if: matrix.sh_passed != 'true'
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.17"
           otp-version: "27"
-
+      - name: Ensure xz is available
+        if: matrix.sh_passed != 'true'
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        if: matrix.sh_passed != 'true'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        if: matrix.sh_passed != 'true'
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
       - name: Restore deps cache
+        if: matrix.sh_passed != 'true'
         uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-prod-
-
       - name: Install dependencies
+        if: matrix.sh_passed != 'true'
         run: mix deps.get --only prod
-
       - name: Build release
+        if: matrix.sh_passed != 'true'
         run: MIX_ENV=prod mix release
         env:
           BURRITO_TARGET: ${{ matrix.target }}
-
       - name: Upload artifact
+        if: matrix.sh_passed != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            burrito_out/${{ matrix.target }}*
-          if-no-files-found: warn
+          path: burrito_out/*${{ matrix.target }}*
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: build
-
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
