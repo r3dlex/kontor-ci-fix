@@ -9,7 +9,7 @@ on:
 
 jobs:
   _mix-audit-self-hosted:
-    name: "Mix Audit (self-hosted)"
+    name: "Mix Audit (advisory, self-hosted)"
     runs-on: [self-hosted, ubuntu-latest]
     env:
       MIX_ENV: dev
@@ -46,15 +46,35 @@ jobs:
           restore-keys: ${{ runner.os }}-mix-
       - name: Install dependencies
         run: mix deps.get
-      - name: Check for vulnerable dependencies
-        run: mix deps.audit
-        continue-on-error: true
+      - name: Check for vulnerable dependencies (advisory)
+        run: |
+          # The audit is ADVISORY. The dependency tree currently carries known
+          # advisories, and turning this into a hard gate is a maintainer
+          # decision that needs those advisories resolved first. What must not
+          # happen is a check that reads as "the tree is clean" while the audit
+          # underneath it exits non-zero, so the failure is reported as a
+          # warning annotation instead of being swallowed by `continue-on-error`.
+          set +e
+          audit_output="$(mix deps.audit 2>&1)"
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -ne 0 ]; then
+            echo "::warning title=Mix Audit (advisory)::mix deps.audit exited $audit_status — the dependency tree has known advisories. This check is advisory and does not fail the build."
+            {
+              echo "### Mix Audit (advisory)"
+              echo ""
+              echo '```'
+              echo "$audit_output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - id: mark
         if: success()
         run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   mix-audit:
-    name: Mix Audit
+    name: Mix Audit (advisory)
     needs: _mix-audit-self-hosted
     if: always()
     runs-on: ubuntu-latest
@@ -81,13 +101,33 @@ jobs:
       - name: Install dependencies
         if: needs._mix-audit-self-hosted.outputs.passed != 'true'
         run: mix deps.get
-      - name: Check for vulnerable dependencies
+      - name: Check for vulnerable dependencies (advisory)
         if: needs._mix-audit-self-hosted.outputs.passed != 'true'
-        run: mix deps.audit
-        continue-on-error: true
+        run: |
+          # The audit is ADVISORY. The dependency tree currently carries known
+          # advisories, and turning this into a hard gate is a maintainer
+          # decision that needs those advisories resolved first. What must not
+          # happen is a check that reads as "the tree is clean" while the audit
+          # underneath it exits non-zero, so the failure is reported as a
+          # warning annotation instead of being swallowed by `continue-on-error`.
+          set +e
+          audit_output="$(mix deps.audit 2>&1)"
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -ne 0 ]; then
+            echo "::warning title=Mix Audit (advisory)::mix deps.audit exited $audit_status — the dependency tree has known advisories. This check is advisory and does not fail the build."
+            {
+              echo "### Mix Audit (advisory)"
+              echo ""
+              echo '```'
+              echo "$audit_output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   _npm-audit-self-hosted:
-    name: "NPM Audit (self-hosted)"
+    name: "NPM Audit (advisory, self-hosted)"
     runs-on: [self-hosted, ubuntu-latest]
     defaults:
       run:
@@ -103,16 +143,37 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm ci
-      - name: Run npm audit
-        run: npm audit --audit-level=high
-        continue-on-error: true
+      - name: Run npm audit (advisory)
+        run: |
+          # The audit is ADVISORY. The frontend dependency tree currently
+          # carries known advisories, and turning this into a hard gate is a
+          # maintainer decision that needs those advisories resolved first.
+          # What must not happen is a check that reads as "the tree is clean"
+          # while the audit underneath it exits non-zero, so the failure is
+          # reported as a warning annotation instead of being swallowed by
+          # `continue-on-error`.
+          set +e
+          audit_output="$(npm audit --audit-level=high 2>&1)"
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -ne 0 ]; then
+            echo "::warning title=NPM Audit (advisory)::npm audit --audit-level=high exited $audit_status — the frontend dependency tree has known advisories. This check is advisory and does not fail the build."
+            {
+              echo "### NPM Audit (advisory)"
+              echo ""
+              echo '```'
+              echo "$audit_output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - id: mark
         if: success()
         working-directory: ${{ github.workspace }}
         run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   npm-audit:
-    name: NPM Audit
+    name: NPM Audit (advisory)
     needs: _npm-audit-self-hosted
     if: always()
     runs-on: ubuntu-latest
@@ -133,7 +194,28 @@ jobs:
       - name: Install dependencies
         if: needs._npm-audit-self-hosted.outputs.passed != 'true'
         run: npm ci
-      - name: Run npm audit
+      - name: Run npm audit (advisory)
         if: needs._npm-audit-self-hosted.outputs.passed != 'true'
-        run: npm audit --audit-level=high
-        continue-on-error: true
+        run: |
+          # The audit is ADVISORY. The frontend dependency tree currently
+          # carries known advisories, and turning this into a hard gate is a
+          # maintainer decision that needs those advisories resolved first.
+          # What must not happen is a check that reads as "the tree is clean"
+          # while the audit underneath it exits non-zero, so the failure is
+          # reported as a warning annotation instead of being swallowed by
+          # `continue-on-error`.
+          set +e
+          audit_output="$(npm audit --audit-level=high 2>&1)"
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -ne 0 ]; then
+            echo "::warning title=NPM Audit (advisory)::npm audit --audit-level=high exited $audit_status — the frontend dependency tree has known advisories. This check is advisory and does not fail the build."
+            {
+              echo "### NPM Audit (advisory)"
+              echo ""
+              echo '```'
+              echo "$audit_output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
