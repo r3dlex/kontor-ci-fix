@@ -12,18 +12,41 @@ jobs:
   # continue-on-error: true means an offline/flake self-hosted runner doesn't
   # block the tag from being released. The gate job routes the canonical leg
   # only when the probe did not pass.
-  # timeout-minutes: 30 bounds a running job; ensure a runner is online to
-  # prevent the tag-release from hanging in queued state.
+  # timeout-minutes: 30 bounds a RUNNING job only — GitHub starts the clock
+  # when the job is picked up by a runner, so it does not bound the queued
+  # state. A probe whose runner is offline waits in the queue indefinitely;
+  # keep a runner online to prevent the tag-release from hanging.
   _build-macos_arm-self-hosted:
     name: "Build macos_arm (self-hosted)"
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: [self-hosted, macOS]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)". The macOS runners are macOS 27 and setup-beam v1
+    # publishes no macos27 alias (its map stops at macos26); on darwin the
+    # alias only labels the build — the OTP build itself is resolved from the
+    # upstream aarch64-apple-darwin version list and downloaded as
+    # <otp>-macos-arm64.tar.gz — so the newest published macOS alias is used.
+    env:
+      ImageOS: macos26
     continue-on-error: true
     timeout-minutes: 30
     outputs:
       passed: ${{ steps.gate.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-1 and r3dlex-runner-2 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
@@ -45,24 +68,54 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kontor-macos-arm
-          path: |
-            burrito_out/macos_arm*
-          if-no-files-found: warn
+          path: burrito_out/*macos_arm*
+          if-no-files-found: error
       - name: Gate
         id: gate
         if: success()
-        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+        env:
+          BURRITO_TARGET: macos_arm
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_macos_arm).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
 
   _build-macos_x86-self-hosted:
     name: "Build macos_x86 (self-hosted)"
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: [self-hosted, macOS]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)". The macOS runners are macOS 27 and setup-beam v1
+    # publishes no macos27 alias (its map stops at macos26); on darwin the
+    # alias only labels the build — the OTP build itself is resolved from the
+    # upstream aarch64-apple-darwin version list and downloaded as
+    # <otp>-macos-arm64.tar.gz — so the newest published macOS alias is used.
+    env:
+      ImageOS: macos26
     continue-on-error: true
     timeout-minutes: 30
     outputs:
       passed: ${{ steps.gate.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-1 and r3dlex-runner-2 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
@@ -84,24 +137,50 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kontor-macos-x86
-          path: |
-            burrito_out/macos_x86*
-          if-no-files-found: warn
+          path: burrito_out/*macos_x86*
+          if-no-files-found: error
       - name: Gate
         id: gate
         if: success()
-        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+        env:
+          BURRITO_TARGET: macos_x86
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_macos_x86).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
 
   _build-linux_x86-self-hosted:
     name: "Build linux_x86 (self-hosted)"
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: [self-hosted, ubuntu-latest]
+    # setup-beam cannot infer the target OS on a self-hosted runner and
+    # aborts with "Tried to map a target OS from env. variable 'ImageOS'
+    # (got undefined)".
+    env:
+      ImageOS: ubuntu24
     continue-on-error: true
     timeout-minutes: 30
     outputs:
       passed: ${{ steps.gate.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare isolated Mix and Hex state
+        run: |
+          # r3dlex-runner-3 and r3dlex-runner-4 are two runner instances on
+          # ONE host that share ONE $HOME, so concurrent `mix local.hex
+          # --force` runs (setup-beam installs Hex and Rebar by default)
+          # corrupt the shared Hex archive. Give every job its own
+          # MIX_HOME/HEX_HOME.
+          echo "MIX_HOME=$RUNNER_TEMP/mix" >> "$GITHUB_ENV"
+          echo "HEX_HOME=$RUNNER_TEMP/hex" >> "$GITHUB_ENV"
+          # setup-beam merges into a stale $RUNNER_TEMP/.setup-beam tree, whose
+          # leftover OTP can shadow the one it just installed.
+          rm -rf "$RUNNER_TEMP/.setup-beam"
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
@@ -123,13 +202,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kontor-linux-x86
-          path: |
-            burrito_out/linux_x86*
-          if-no-files-found: warn
+          path: burrito_out/*linux_x86*
+          if-no-files-found: error
       - name: Gate
         id: gate
         if: success()
-        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+        env:
+          BURRITO_TARGET: linux_x86
+        run: |
+          # Burrito writes burrito_out/<release>_<target> (kontor_linux_x86).
+          # The upload above already fails the job when it finds nothing; this
+          # asserts the same thing before the leg may claim it passed.
+          if ! ls burrito_out/*"${BURRITO_TARGET}"* >/dev/null 2>&1; then
+            echo "::error::no release binary was produced for ${BURRITO_TARGET}"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
 
   # ── Tier 2: gate router ───────────────────────────────────────────────────
   # One gate per target reads the corresponding probe result.
@@ -242,9 +330,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            burrito_out/${{ matrix.target }}*
-          if-no-files-found: warn
+          path: burrito_out/*${{ matrix.target }}*
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
