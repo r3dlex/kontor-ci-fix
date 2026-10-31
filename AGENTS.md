@@ -381,6 +381,25 @@ npm install
 npm run tauri dev
 ```
 
+### ADR Governance
+The ADR corpus lives in `.archgate/adrs/` (one `<id>.md` plus its companion
+`<id>.rules.ts`). The gate is `.github/scripts/archgate-check.sh`, run by
+`.github/workflows/archgate.yml` and by the `archgate` job in `ci.yml`.
+
+- The gate pins archgate `0.60.0` and runs it with `--staged`, so the
+  changed-file set is empty in CI and every ADR in the corpus is evaluated.
+  It fails closed: an empty or unreadable corpus, a corpus in which no ADR
+  declares `rules: true`, a report that evaluated no rule, and an ADR that
+  declares rules but produced no result are all build failures.
+- `.archgate/rules.d.ts` is **generated** by archgate ("do not edit"). It is
+  checked in so the `/// <reference path="../rules.d.ts" />` chain in the
+  rule files type-checks in editors; refresh it whenever the pinned archgate
+  version is bumped, or a local `archgate check` will leave it modified.
+- `.archgate/config.ts` is **not read** by archgate 0.60.0 — the CLI reads
+  `.archgate/config.json`, which only carries custom ADR domain prefixes.
+  The behaviour it describes (`adrDir`, `failOn`, `ignore`) is the CLI
+  default, so the file documents intent rather than configuring the tool.
+
 ## v1 Scope
 
 Core email unification, basic AI classification and scoring, thread markdown generation, reply drafting, task extraction, calendar integration (Google + Microsoft), skill system, multi-mailbox support, persistent chat, contact profiles, Asana sync, n8n integration.
