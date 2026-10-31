@@ -2,7 +2,7 @@ defmodule Kontor.CI.SelfHostedWorkflowTest do
   @moduledoc """
   Regression coverage for the self-hosted legs of the GitHub Actions workflows.
 
-  Two invariants are locked here:
+  Four invariants are locked here:
 
     1. Every self-hosted job that installs Elixir with `erlef/setup-beam`
        declares `env.ImageOS` and isolates `MIX_HOME`/`HEX_HOME` under
@@ -16,6 +16,12 @@ defmodule Kontor.CI.SelfHostedWorkflowTest do
        before it reports success. Burrito writes `burrito_out/<release>_<target>`,
        so a glob that only matches a bare `<target>` name uploads nothing —
        with `if-no-files-found: warn` that shipped a release without a binary.
+    3. Every leg that runs `mix release` installs zig 0.15.2 and checks that
+       `xz` is available. burrito 1.5.0's `pre_check/0` aborts the release
+       when either is missing, and no runner in the fleet ships zig.
+    4. The dependency audits are labelled advisory and report their findings
+       as an annotation. A check that concludes `success` while the audit
+       underneath it exits non-zero reads as "the tree is clean".
 
   The pre-fix `release.yml` violated every one of these rules, so this file
   fails against it and passes against the fixed workflows.
@@ -96,6 +102,41 @@ defmodule Kontor.CI.SelfHostedWorkflowTest do
     end
   end
 
+  test "every release leg that builds a release installs zig 0.15.2 and checks xz" do
+    release = Path.join(@workflows, "release.yml")
+
+    for {job_id, job} <- jobs(release),
+        builds_release?(job) do
+      zig = Enum.find(steps(job), &String.contains?(to_string(&1["uses"] || ""), "setup-zig"))
+
+      assert zig, "#{job_id} runs `mix release` but never installs zig"
+
+      assert to_string((zig["with"] || %{})["version"] || "") == "0.15.2",
+             "#{job_id} does not pin zig to the version burrito requires"
+
+      run_scripts = job |> steps() |> Enum.map_join("\n", &to_string(&1["run"] || ""))
+
+      assert run_scripts =~ "zig version",
+             "#{job_id} does not check the zig version burrito requires"
+
+      assert run_scripts =~ "xz",
+             "#{job_id} does not check for xz, which burrito's pre_check requires"
+    end
+  end
+
+  test "the dependency audits are labelled advisory and report their findings" do
+    security = Path.join(@workflows, "security.yml")
+
+    for {job_id, job} <- jobs(security),
+        audit = Enum.find(steps(job), &audits_dependencies?(&1)) do
+      assert to_string(job["name"] || "") =~ "advisory",
+             "#{job_id} runs a dependency audit but its name does not say it is advisory"
+
+      assert to_string(audit["run"] || "") =~ "::warning",
+             "#{job_id}: the audit step does not surface its findings as an annotation"
+    end
+  end
+
   defp workflow_files, do: Path.wildcard(Path.join(@workflows, "*.yml"))
 
   defp jobs(path) do
@@ -116,6 +157,18 @@ defmodule Kontor.CI.SelfHostedWorkflowTest do
 
   defp installs_elixir?(job) do
     Enum.any?(steps(job), &String.contains?(to_string(&1["uses"] || ""), "setup-beam"))
+  end
+
+  defp builds_release?(job) do
+    job
+    |> steps()
+    |> Enum.any?(&String.contains?(to_string(&1["run"] || ""), "mix release"))
+  end
+
+  defp audits_dependencies?(step) do
+    run = to_string(step["run"] || "")
+
+    String.contains?(run, "mix deps.audit") or String.contains?(run, "npm audit")
   end
 
   defp install_policy_violations(job) do
