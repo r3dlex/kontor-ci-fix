@@ -52,6 +52,48 @@ jobs:
         with:
           elixir-version: "1.17"
           otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
       - name: Restore deps cache
         uses: actions/cache@v4
         with:
@@ -121,6 +163,48 @@ jobs:
         with:
           elixir-version: "1.17"
           otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
       - name: Restore deps cache
         uses: actions/cache@v4
         with:
@@ -186,6 +270,48 @@ jobs:
         with:
           elixir-version: "1.17"
           otp-version: "27"
+      - name: Ensure xz is available
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs. The Linux runners ship /usr/bin/xz, but macOS 27
+          # dropped it and the macOS runners carry Homebrew's xz instead, which
+          # lives outside the launchd service PATH on some of them.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          # The two macOS runners share one $HOME, so the runner tool cache and
+          # the zig cache are shared too: two concurrent release legs would
+          # race on the same tool-cache directory. Keep both caches off and let
+          # every job extract its own copy.
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
       - name: Restore deps cache
         uses: actions/cache@v4
         with:
@@ -268,9 +394,13 @@ jobs:
 
   # ── Tier 3: canonical GH-hosted fallback per target ───────────────────────
   # Run only when the corresponding self-hosted probe did not pass.
-  # Branch-protection watches job *name* (preserved as "Build ${{matrix.target}}").
-  # The matrix `include:` block is preserved verbatim on the canonical leg so
-  # the tag-release artifact name and BURRITO_TARGET chain stay identical.
+  # The job *name* ("Build ${{matrix.target}}") and the matrix `include:` block
+  # are preserved from the base workflow so the tag-release artifact name and
+  # BURRITO_TARGET chain stay identical. Branch protection watches job names,
+  # so keeping them stable matters if this workflow is upstreamed into a
+  # protected repository — this repository itself has no branch protection
+  # (`gh api repos/…/branches/main/protection` returns 404), so nothing here
+  # gates a merge on these names today.
   build:
     name: Build ${{ matrix.target }}
     needs: [_build-macos_arm-gate, _build-macos_x86-gate, _build-linux_x86-gate]
@@ -310,6 +440,45 @@ jobs:
         with:
           elixir-version: "1.17"
           otp-version: "27"
+      - name: Ensure xz is available
+        if: matrix.sh_passed != 'true'
+        run: |
+          # setup-zig extracts the zig tarball with `tar -xJ`, and burrito's
+          # pre_check/0 requires `xz` on PATH, so xz has to be in place before
+          # the zig step runs.
+          if ! command -v xz >/dev/null 2>&1; then
+            for dir in /opt/homebrew/opt/xz/bin /usr/local/opt/xz/bin /opt/homebrew/bin /usr/local/bin; do
+              if [ -x "$dir/xz" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v xz >/dev/null 2>&1; then
+            echo "::error::xz is not on PATH — setup-zig and burrito both require it"
+            exit 1
+          fi
+          echo "xz: $(command -v xz)"
+      - name: Install Zig
+        if: matrix.sh_passed != 'true'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: "0.15.2"
+          use-cache: false
+          use-tool-cache: false
+      - name: Verify the burrito build prerequisites
+        if: matrix.sh_passed != 'true'
+        run: |
+          # burrito 1.5.0 aborts `mix release` when zig is not exactly
+          # 0.15.2. Check it before the build so the failure names the
+          # version instead of surfacing as a bare release-step abort.
+          zig_version="$(zig version 2>/dev/null || true)"
+          if [ "$zig_version" != "0.15.2" ]; then
+            echo "::error::burrito 1.5.0 requires zig 0.15.2 exactly; found '${zig_version:-no zig on PATH}'"
+            exit 1
+          fi
+          echo "zig $zig_version"
       - name: Restore deps cache
         if: matrix.sh_passed != 'true'
         uses: actions/cache@v4
